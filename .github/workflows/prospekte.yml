@@ -1,0 +1,51 @@
+name: Prospekte Bad Marienberg
+
+on:
+  schedule:
+    # Montags 04:17 UTC = 05:17 Uhr (Winterzeit) bzw. 06:17 Uhr (Sommerzeit) in Berlin
+    - cron: "17 4 * * 1"
+  workflow_dispatch: {}   # zum Testen: Actions -> "Run workflow"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prospekte
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Abhängigkeiten installieren
+        run: pip install -r requirements.txt
+
+      - name: Prospekte laden
+        env:
+          MAX_PAGES: "40"
+          OUT_DIR: out
+        run: python fetch_prospekte.py
+
+      # Die Bilder landen auf dem Branch "prospekte". Er wird jede Woche neu
+      # geschrieben (ein einziger Commit), damit das Repo nicht jede Woche
+      # um viele MB wächst. Der main-Branch bleibt unverändert.
+      - name: Auf Branch "prospekte" veröffentlichen
+        if: always()
+        run: |
+          set -e
+          [ -d out ] || { echo "Keine Ausgabe"; exit 1; }
+          cd out
+          git init -q -b prospekte
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          echo "Stand: $(date -u +%FT%TZ)" > STAND.txt
+          git add -A
+          git commit -q -m "Prospekte $(ls -d 20*-KW* | tail -1)"
+          git push -q --force "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" prospekte
