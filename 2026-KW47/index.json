@@ -1,0 +1,80 @@
+{
+  "erstellt": "2026-11-17T11:17:39",
+  "kalenderwoche": "2026-KW47",
+  "ort": "56470 Bad Marienberg",
+  "haendler": {
+    "lidl": {
+      "name": "Lidl",
+      "ok": true,
+      "fehler": null,
+      "quelle": "https://endpoints.leaflets.schwarz/v4/overview?client_locale=lidl/de-DE&store_id=DE06535",
+      "prospekte": [
+        {
+          "pdf": "https://assets.leaflets.schwarz/leaflets/pdfs/01a1c9c3-fbc1-7394-ad19-64f2397aba30/Aktionsprospekt-16-11-2026-21-11-2026-02.pdf",
+          "datei": "out/2026-KW47/lidl/lidl_kw47.pdf",
+          "titel": "Aktionsprospekt 16.11.2026 – 21.11.2026"
+        }
+      ]
+    },
+    "aldi-sued": {
+      "name": "ALDI SÜD",
+      "ok": true,
+      "fehler": null,
+      "quelle": "https://www.aldi-sued.de/prospekte",
+      "hinweis": "Übersicht HTTP 403, 0 Links",
+      "prospekte": [
+        {
+          "pdf": "https://view.publitas.com/73714/3517622/pdfs/2aa20c3a-c4f0-4144-9f84-8cbb19ecb643.pdf?response-content-disposition=attachment%3B+filename%2A%3DUTF-8%27%27ALDI%2520S%25C3%259CD%2520Prospekt%253A%2520aktuelle%2520Angebote.pdf",
+          "datei": "out/2026-KW47/aldi-sued/aldi-sued_kw47.pdf",
+          "prospekt": "https://prospekt.aldi-sued.de/kw47-26-op-mp"
+        }
+      ]
+    },
+    "rewe": {
+      "name": "REWE",
+      "ok": true,
+      "fehler": null,
+      "quelle": "https://services.publitas.com/rewe/publications?week=47&wwident=1761545&feature=download",
+      "prospekte": [
+        {
+          "pdf": "https://view.publitas.com/89773/3533944/pdfs/ef01e2fb-f65e-4e70-880c-b96e1705d525.pdf?response-content-disposition=attachment%3B+filename%2A%3DUTF-8%27%27REWE%2520Markt%2520GmbH%2520-%2520rewe_2026_wk47_1761545_v1.pdf",
+          "datei": "out/2026-KW47/rewe/rewe_kw47.pdf",
+          "prospekt": "https://view.publitas.com/rewe-markt/rewe_2026_wk47_1761545_v1/?feature=download&publitas_embed=maximized"
+        }
+      ]
+    },
+    "netto": {
+      "name": "Netto Marken-Discount",
+      "ok": true,
+      "fehler": null,
+      "quelle": "https://www.netto-online.de/ueber-netto/Online-Prospekte.chtm?stores_id=6835",
+      "hinweis": "netto-online.de HTTP 403",
+      "prospekte": [
+        {
+          "pdf": "https://view.publitas.com/100989/3538307/pdfs/c12d1e73-8815-4039-bd6c-0920e7c2d25d.pdf?response-content-disposition=attachment%3B+filename%2A%3DUTF-8%27%27hz47_kess.pdf",
+          "datei": "out/2026-KW47/netto/netto_kw47.pdf",
+          "prospekt": "https://wochenprospekt.netto-online.de/hz47_kess/?storeid=6835"
+        }
+      ]
+    },
+    "edeka": {
+      "name": "EDEKA",
+      "ok": true,
+      "fehler": null,
+      "quelle": "https://www.edeka.de/maerkte/070380/prospekte/",
+      "hinweis": "Marktseite HTTP 403, 0 Kataloge",
+      "prospekte": [
+        {
+          "pdf": "https://blaetterkatalog.edeka.de/RHEINRUHR/0380/blaetterkatalog/pdf/complete.pdf",
+          "datei": "out/2026-KW47/edeka/edeka_0380_kw47.pdf",
+          "name": "0380"
+        },
+        {
+          "pdf": "https://blaetterkatalog.edeka.de/RHEINRUHR/SUUPER_Angebote/blaetterkatalog/pdf/complete.pdf",
+          "datei": "out/2026-KW47/edeka/edeka_SUUPER_Angebote_kw47.pdf",
+          "name": "SUUPER_Angebote"
+        }
+      ]
+    }
+  }
+}
