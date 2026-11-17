@@ -5,13 +5,15 @@ für 56470 Bad Marienberg und legt sie auf dem Branch `prospekte` ab.
 
 Die Prospekt-URLs wechseln jede Woche. Deshalb ermittelt das Skript sie bei jedem Lauf neu:
 
-| Händler  | Hauptquelle                                       | Reserve |
-|----------|---------------------------------------------------|---------|
-| EDEKA    | edeka.de-Marktseite 070380 → Blätterkatalog-Bilder | kaufDA  |
-| Lidl     | Lidl-Prospekt-API → PDF                            | kaufDA  |
-| Aldi Süd | kaufDA (Bad Marienberg) → Seitenbilder + Angebotstexte | –   |
-| REWE     | kaufDA (Bad Marienberg) → Seitenbilder + Angebotstexte | –   |
-| Netto    | kaufDA (Bad Marienberg) → Seitenbilder + Angebotstexte | –   |
+| Händler  | Offizielle Quelle                                                     | Ergebnis   | Reserve |
+|----------|------------------------------------------------------------------------|------------|---------|
+| EDEKA    | edeka.de, Markt 070380 (Osterkamp) → Blätterkatalog „Komplettes PDF“  | PDF        | Seitenbilder, kaufDA |
+| Lidl     | Lidl-Prospekt-API                                                      | PDF        | kaufDA  |
+| Aldi Süd | aldi-sued.de/prospekte → Prospekt „kw<KW>-<JJ>…“                       | PDF        | kaufDA  |
+| REWE     | REWE-Prospekt für Markt 1761545 (An der Lehmkaute 2)                   | PDF        | kaufDA  |
+| Netto    | netto-online.de, Filiale 6835 (Jahnstr. 9a) → Wochenprospekt           | PDF        | kaufDA  |
+
+kaufDA wird nur genutzt, wenn die offizielle Quelle in dieser Woche scheitert.
 
 ## Einrichtung
 
@@ -32,11 +34,11 @@ Die Prospekt-URLs wechseln jede Woche. Deshalb ermittelt das Skript sie bei jede
 ```
 <JJJJ>-KW<ww>/
   index.json                 Übersicht: welche Quelle hat geklappt, welche nicht
-  lidl/       lidl_prospekt_1.pdf, lidl_kaufda_1_seite_01.jpg, ...
-  aldi-sued/  aldi-sued_kaufda_1_seite_01.jpg, aldi-sued_kaufda_angebote.txt
-  rewe/       ...
-  netto/      ...
-  edeka/      edeka_0380_seite_01.jpg, edeka_SUUPER_Angebote_seite_01.jpg, ...
+  lidl/       lidl_prospekt_1.pdf
+  aldi-sued/  aldi-sued_kw47.pdf
+  rewe/       rewe_kw47.pdf
+  netto/      netto_kw47.pdf
+  edeka/      edeka_0380.pdf, edeka_SUUPER_Angebote.pdf
 ```
 
 ## Hinweise
