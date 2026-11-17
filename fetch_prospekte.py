@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-Lädt jeden Montag die aktuellen Prospekte für 56470 Bad Marienberg herunter:
+Lädt jeden Montag die aktuellen Prospekte für 56470 Bad Marienberg als PDF:
 Lidl, Aldi Süd, REWE, Netto Marken-Discount, EDEKA.
 
 Die Prospekt-URLs ändern sich wöchentlich. Deshalb werden sie bei jedem Lauf
-neu ermittelt, nie fest eingetragen:
+neu ermittelt. Jede Quelle hat einen Ersatzweg, falls die Händler-Webseite
+Zugriffe von GitHub-Servern blockiert:
 
-  * EDEKA:    Marktseite edeka.de/maerkte/070380/prospekte/ -> Blätterkatalog -> komplettes PDF
-  * Lidl:     Prospekt-API endpoints.leaflets.schwarz -> PDF
-  * Aldi Süd: aldi-sued.de/prospekte -> Link "kw<KW>-<JJ>..." -> PDF (Publitas)
+  * Lidl:     Prospekt-API mit Filiale DE06535 (Jahnstraße 40) -> PDF
+  * Aldi Süd: aldi-sued.de/prospekte -> "kw<KW>-<JJ>..."; Ersatz: bekannte Namensmuster
   * REWE:     services.publitas.com/rewe/publications?week=<KW>&wwident=1761545 -> PDF
-  * Netto:    netto-online.de Prospektseite für Filiale 6835 -> wochenprospekt... -> PDF
-  * Reserve:  kaufDA-Händlerseite für Bad Marienberg (nur wenn die offizielle Quelle scheitert)
+  * Netto:    netto-online.de für Filiale 6835; Ersatz: wochenprospekt.../hz<KW>_<Region>/
+  * EDEKA:    Marktseite 070380 -> Blätterkatalog -> complete.pdf; Ersatz: bekannte Katalogordner
+  * kaufDA:   nur noch Angebotstexte als letzte Notlösung (zählt nicht als Erfolg)
 
 Ausgabe:  out/<JJJJ>-KW<ww>/<händler>/...  plus out/<JJJJ>-KW<ww>/index.json
-Jede Quelle ist einzeln abgesichert: Fällt eine aus, laufen die anderen weiter.
 """
 
 from __future__ import annotations
@@ -31,30 +31,33 @@ import requests
 from bs4 import BeautifulSoup
 
 # ----------------------------------------------------------------- Einstellungen
-CITY_SLUG = "Bad-Marienberg"          # kaufDA-Ortsname
-EDEKA_MARKET_ID = "070380"            # EDEKA Steffen Osterkamp
-REWE_MARKET_ID = "1761545"            # REWE Familie Hundertmark, An der Lehmkaute 2
-NETTO_STORE_ID = "6835"               # Netto, Jahnstr. 9a
-MAX_PAGES = int(os.environ.get("MAX_PAGES", "40"))   # max. Seiten je Prospekt
+CITY_SLUG = "Bad-Marienberg"                 # kaufDA-Ortsname
+LIDL_STORE_ID = "DE06535"                    # Lidl, Jahnstraße 40
+EDEKA_MARKET_ID = "070380"                   # EDEKA Steffen Osterkamp
+EDEKA_KATALOGE = ["RHEINRUHR/0380", "RHEINRUHR/SUUPER_Angebote"]   # Ersatz, falls Marktseite blockt
+REWE_MARKET_ID = "1761545"                   # REWE Familie Hundertmark, An der Lehmkaute 2
+NETTO_STORE_ID = "6835"                      # Netto, Jahnstr. 9a
+NETTO_REGION = "kess"                        # Regionalausgabe dieser Filiale (hz<KW>_kess)
+ALDI_SUFFIXE = ["op-mp", "op", "vop", "mp", ""]   # Ersatz: übliche Namensendungen
 OUT_DIR = Path(os.environ.get("OUT_DIR", "out"))
 
-# kaufDA-Händler-IDs (p-r<ID>). Fehlt eine ID oder stimmt sie nicht mehr,
-# sucht das Skript sie auf der Ortsseite von kaufDA neu.
 RETAILERS = {
-    "lidl":     {"name": "Lidl",                  "kaufda": ("Lidl", 74),                   "match": r"lidl"},
-    "aldi-sued": {"name": "ALDI SÜD",             "kaufda": ("Aldi-Sued", None),            "match": r"aldi[\s\-_]*s(ü|ue|u)d"},
-    "rewe":     {"name": "REWE",                  "kaufda": ("REWE", 101),                  "match": r"rewe"},
-    "netto":    {"name": "Netto Marken-Discount", "kaufda": ("Netto-Marken-Discount", 9),   "match": r"netto"},
-    "edeka":    {"name": "EDEKA",                 "kaufda": ("EDEKA", 107),                 "match": r"edeka"},
+    "lidl":      {"name": "Lidl",                  "kaufda": ("Lidl", 74)},
+    "aldi-sued": {"name": "ALDI SÜD",              "kaufda": ("ALDI-SUeD", 90)},
+    "rewe":      {"name": "REWE",                  "kaufda": ("REWE", 101)},
+    "netto":     {"name": "Netto Marken-Discount", "kaufda": ("Netto-Marken-Discount", 9)},
+    "edeka":     {"name": "EDEKA",                 "kaufda": ("EDEKA", 107)},
 }
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/130.0 Safari/537.36")
 S = requests.Session()
-S.headers.update({"User-Agent": UA, "Accept-Language": "de-DE,de;q=0.9"})
+S.headers.update({"User-Agent": UA, "Accept-Language": "de-DE,de;q=0.9",
+                  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"})
 
 TODAY = dt.date.today()
 YEAR, WEEK, _ = TODAY.isocalendar()
+YY = f"{YEAR % 100:02d}"
 WEEK_DIR = OUT_DIR / f"{YEAR}-KW{WEEK:02d}"
 
 
@@ -79,53 +82,37 @@ def get(url, **kw):
     return r
 
 
-def is_image(r):
-    return r.status_code == 200 and r.headers.get("content-type", "").startswith("image") and len(r.content) > 2000
+def save_pdf(url: str, dest: Path, filename: str) -> dict | None:
+    """Lädt ein PDF; gibt None zurück, wenn unter der Adresse kein PDF liegt."""
+    r = get(url, timeout=240)
+    if r.status_code != 200 or r.content[:4] != b"%PDF":
+        return None
+    f = dest / filename
+    f.write_bytes(r.content)
+    log(f"   PDF: {filename} ({len(r.content) // 1024} KB)")
+    return {"pdf": url, "datei": str(f)}
 
 
-def download_pages(url_for_page, dest: Path, prefix: str) -> list[str]:
-    """Lädt Seite 1, 2, 3 ... bis eine Seite fehlt (oder MAX_PAGES erreicht)."""
-    files = []
-    for n in range(1, MAX_PAGES + 1):
-        r = get(url_for_page(n))
-        if not is_image(r):
-            break
-        ext = ".png" if "png" in r.headers.get("content-type", "") else ".jpg"
-        f = dest / f"{prefix}_seite_{n:02d}{ext}"
-        f.write_bytes(r.content)
-        files.append(str(f))
-    return files
+# ------------------------------------------------- Publitas (Aldi Süd, REWE, Netto)
+PDF_RE = re.compile(r"https?://[^\"'\s\\<>]+?/pdfs/[0-9a-f\-]+\.pdf[^\"'\s\\<>]*", re.I)
 
 
-# ------------------------------------------------------------------- EDEKA direkt
-def fetch_edeka(dest: Path) -> dict:
-    url = f"https://www.edeka.de/maerkte/{EDEKA_MARKET_ID}/prospekte/"
-    html = get(url).text
-    bases = sorted(set(re.findall(r"https://blaetterkatalog\.edeka\.de/[A-Za-z0-9_\-/]+?/(?=index\.html|blaetterkatalog/)", html)))
-    if not bases:
-        raise RuntimeError("Keine Blätterkatalog-Links auf der EDEKA-Marktseite gefunden")
-    result = {"quelle": url, "prospekte": []}
-    for base in bases:
-        name = base.rstrip("/").split("/")[-1]
-        # 1) Komplettes PDF (Option "Speichern als PDF -> Komplettes PDF" im Katalog)
-        pdf_url = f"{base}blaetterkatalog/pdf/complete.pdf"
-        r = get(pdf_url, timeout=180)
-        if r.status_code == 200 and r.content[:4] == b"%PDF":
-            f = dest / f"edeka_{name}.pdf"
-            f.write_bytes(r.content)
-            log(f"   EDEKA {name}: PDF ({len(r.content)//1024} KB)")
-            result["prospekte"].append({"name": name, "pdf": pdf_url, "datei": str(f)})
-            continue
-        # 2) Reserve: einzelne Seitenbilder
-        files = download_pages(lambda n: f"{base}blaetterkatalog/large/bk_{n}.jpg", dest, f"edeka_{name}")
-        log(f"   EDEKA {name}: kein PDF, {len(files)} Seitenbilder")
-        result["prospekte"].append({"name": name, "basis": base, "dateien": files})
-    if not any(p.get("datei") or p.get("dateien") for p in result["prospekte"]):
-        raise RuntimeError("EDEKA-Blätterkatalog gefunden, aber weder PDF noch Seitenbilder ladbar")
-    return result
+def publitas_pdf(viewer_url: str, dest: Path, filename: str) -> dict:
+    """Öffnet einen Publitas-Prospekt und lädt das dort verlinkte PDF."""
+    r = get(viewer_url, allow_redirects=True)
+    if r.status_code != 200:
+        raise RuntimeError(f"{viewer_url} -> HTTP {r.status_code}")
+    m = PDF_RE.search(r.text)
+    if not m:
+        raise RuntimeError(f"Kein PDF-Link auf {r.url}")
+    res = save_pdf(m.group(0).replace("&amp;", "&"), dest, filename)
+    if not res:
+        raise RuntimeError(f"PDF-Link auf {r.url} lieferte kein PDF")
+    res["prospekt"] = r.url
+    return res
 
 
-# -------------------------------------------------------------------- Lidl direkt
+# ------------------------------------------------------------------------- Lidl
 def _walk(obj):
     if isinstance(obj, dict):
         yield obj
@@ -145,140 +132,123 @@ def _date(d: dict, *keys):
 
 
 def fetch_lidl(dest: Path) -> dict:
-    url = "https://endpoints.leaflets.schwarz/v4/overview?client_locale=lidl/de-DE"
-    data = get(url).json()
-    flyers = []
-    for d in _walk(data):
-        pdf = d.get("pdfUrl")
-        if not pdf:
+    # store_id filtert auf die Prospekte dieser Filiale (sonst ~40 Regionalausgaben)
+    url = f"https://endpoints.leaflets.schwarz/v4/overview?client_locale=lidl/de-DE&store_id={LIDL_STORE_ID}"
+    r = get(url)
+    if r.status_code != 200:
+        raise RuntimeError(f"Lidl-API -> HTTP {r.status_code}")
+    candidates = []
+    for d in _walk(r.json()):
+        if not d.get("pdfUrl") or d.get("name") != "Aktionsprospekt":
             continue
         start = _date(d, "offerStartDate", "startDate")
         end = _date(d, "offerEndDate", "endDate")
-        # nur Prospekte, die diese Woche gelten
-        if start and start > TODAY + dt.timedelta(days=6):
-            continue
-        if end and end < TODAY:
-            continue
-        title = " ".join(str(d.get(k, "")) for k in ("name", "title", "subtitle"))
-        flyers.append({"titel": title.strip(), "pdf": pdf, "von": str(start), "bis": str(end)})
-    if not flyers:
-        raise RuntimeError("Lidl-API lieferte keinen aktuellen Prospekt mit PDF")
-    # Aktionsprospekt(e) zuerst, insgesamt max. 3 PDFs
-    flyers.sort(key=lambda f: 0 if re.search(r"aktion|filial|lohnt", f["titel"], re.I) else 1)
-    flyers = flyers[:3]
-    for i, f in enumerate(flyers, 1):
-        r = get(f["pdf"], timeout=120)
-        if r.status_code == 200 and r.content[:4] == b"%PDF":
-            p = dest / f"lidl_prospekt_{i}.pdf"
-            p.write_bytes(r.content)
-            f["datei"] = str(p)
-            log(f"   Lidl PDF {i}: {f['titel'][:60]} ({len(r.content)//1024} KB)")
-    if not any("datei" in f for f in flyers):
-        raise RuntimeError("Lidl-PDFs gefunden, aber nicht ladbar")
-    return {"quelle": url, "prospekte": flyers}
+        # Montag früh: der Prospekt, der diese Woche gilt (nicht die Vorschau auf nächste Woche)
+        if start and end and start <= TODAY + dt.timedelta(days=1) and end >= TODAY:
+            candidates.append((start, d))
+    if not candidates:
+        raise RuntimeError("Lidl-API: kein Aktionsprospekt für diese Woche")
+    start, d = max(candidates, key=lambda c: c[0])
+    res = save_pdf(d.get("hiResPdfUrl") or d["pdfUrl"], dest, f"lidl_kw{WEEK:02d}.pdf")
+    if not res:
+        raise RuntimeError("Lidl-PDF nicht ladbar")
+    res["titel"] = f"{d.get('name')} {d.get('title')}"
+    return {"quelle": url, "prospekte": [res]}
 
 
-# ------------------------------------------------- Publitas (Aldi Süd, REWE, Netto)
-PDF_RE = re.compile(r"https?://[^\"'\s\\<>]+?/pdfs/[0-9a-f\-]+\.pdf[^\"'\s\\<>]*", re.I)
-
-
-def publitas_pdf(viewer_url: str, dest: Path, filename: str) -> dict:
-    """Öffnet einen Publitas-Prospekt und lädt das dort verlinkte PDF."""
-    r = get(viewer_url, allow_redirects=True)
-    if r.status_code != 200:
-        raise RuntimeError(f"Prospektseite {viewer_url} antwortete mit {r.status_code}")
-    m = PDF_RE.search(r.text)
-    if not m:
-        raise RuntimeError(f"Kein PDF-Link auf {r.url}")
-    pdf_url = m.group(0).replace("&amp;", "&")
-    p = get(pdf_url, timeout=180)
-    if p.status_code != 200 or p.content[:4] != b"%PDF":
-        raise RuntimeError(f"PDF nicht ladbar ({p.status_code})")
-    f = dest / filename
-    f.write_bytes(p.content)
-    log(f"   PDF: {filename} ({len(p.content)//1024} KB) von {r.url}")
-    return {"prospekt": r.url, "pdf": pdf_url, "datei": str(f)}
-
-
+# --------------------------------------------------------------------- Aldi Süd
 def fetch_aldi(dest: Path) -> dict:
     url = "https://www.aldi-sued.de/prospekte"
-    html = get(url).text
-    yy = f"{YEAR % 100:02d}"
-    links = list(dict.fromkeys(re.findall(r"https://prospekt\.aldi-sued\.de/[a-z0-9\-]+", html, re.I)))
-    week = [l for l in links if re.search(rf"/kw0?{WEEK}-{yy}\b", l, re.I)]
-    if not week:
-        raise RuntimeError(f"Kein Aldi-Prospekt für KW{WEEK} gefunden (Links: {links[:6]})")
-    return {"quelle": url, "prospekte": [publitas_pdf(week[0], dest, f"aldi-sued_kw{WEEK:02d}.pdf")]}
+    tried, note = [], ""
+    try:
+        r = get(url)
+        links = list(dict.fromkeys(re.findall(r"https://prospekt\.aldi-sued\.de/[a-z0-9\-]+", r.text, re.I)))
+        tried = [l for l in links if re.search(rf"/kw0?{WEEK}-{YY}\b", l, re.I)]
+        note = f"Übersicht HTTP {r.status_code}, {len(links)} Links"
+    except requests.RequestException as e:
+        note = f"Übersicht nicht erreichbar: {e}"
+    # Ersatz: übliche Namensmuster direkt beim Prospekt-Server probieren
+    for suf in ALDI_SUFFIXE:
+        cand = f"https://prospekt.aldi-sued.de/kw{WEEK}-{YY}" + (f"-{suf}" if suf else "")
+        if cand not in tried:
+            tried.append(cand)
+    errors = []
+    for viewer in tried:
+        try:
+            res = publitas_pdf(viewer, dest, f"aldi-sued_kw{WEEK:02d}.pdf")
+            return {"quelle": url, "hinweis": note, "prospekte": [res]}
+        except Exception as e:
+            errors.append(str(e))
+    raise RuntimeError(f"{note}; nichts gefunden: {errors[:4]}")
 
 
+# ------------------------------------------------------------------------- REWE
 def fetch_rewe(dest: Path) -> dict:
     viewer = (f"https://services.publitas.com/rewe/publications"
               f"?week={WEEK}&wwident={REWE_MARKET_ID}&feature=download")
     return {"quelle": viewer, "prospekte": [publitas_pdf(viewer, dest, f"rewe_kw{WEEK:02d}.pdf")]}
 
 
+# ------------------------------------------------------------------------ Netto
 def fetch_netto(dest: Path) -> dict:
     url = f"https://www.netto-online.de/ueber-netto/Online-Prospekte.chtm?stores_id={NETTO_STORE_ID}"
-    r = get(url)
-    m = re.search(r"https://wochenprospekt\.netto-online\.de/[a-z0-9_\-]+/\?storeid=\d+", r.text, re.I)
-    if not m:
-        raise RuntimeError(f"Kein Netto-Wochenprospekt auf der Prospektseite (HTTP {r.status_code})")
-    return {"quelle": url, "prospekte": [publitas_pdf(m.group(0), dest, f"netto_kw{WEEK:02d}.pdf")]}
+    viewers, note = [], ""
+    try:
+        r = get(url)
+        m = re.search(r"https://wochenprospekt\.netto-online\.de/[a-z0-9_\-]+/\?storeid=\d+", r.text, re.I)
+        if m:
+            viewers.append(m.group(0))
+        note = f"netto-online.de HTTP {r.status_code}"
+    except requests.RequestException as e:
+        note = f"netto-online.de nicht erreichbar: {e}"
+    # Ersatz: Prospekt-Server direkt (Regionalausgabe der Filiale)
+    viewers.append(f"https://wochenprospekt.netto-online.de/hz{WEEK}_{NETTO_REGION}/?storeid={NETTO_STORE_ID}")
+    errors = []
+    for v in dict.fromkeys(viewers):
+        try:
+            return {"quelle": url, "hinweis": note,
+                    "prospekte": [publitas_pdf(v, dest, f"netto_kw{WEEK:02d}.pdf")]}
+        except Exception as e:
+            errors.append(str(e))
+    raise RuntimeError(f"{note}; {errors}")
+
+
+# ------------------------------------------------------------------------ EDEKA
+def fetch_edeka(dest: Path) -> dict:
+    url = f"https://www.edeka.de/maerkte/{EDEKA_MARKET_ID}/prospekte/"
+    bases, note = [], ""
+    try:
+        r = get(url)
+        bases = re.findall(r"https://blaetterkatalog\.edeka\.de/([A-Za-z0-9_\-]+/[A-Za-z0-9_\-]+)/(?:index\.html|blaetterkatalog/)", r.text)
+        note = f"Marktseite HTTP {r.status_code}, {len(set(bases))} Kataloge"
+    except requests.RequestException as e:
+        note = f"Marktseite nicht erreichbar: {e}"
+    bases = list(dict.fromkeys(bases or EDEKA_KATALOGE))
+    prospekte = []
+    for b in bases:
+        name = b.split("/")[-1]
+        res = save_pdf(f"https://blaetterkatalog.edeka.de/{b}/blaetterkatalog/pdf/complete.pdf",
+                       dest, f"edeka_{name}_kw{WEEK:02d}.pdf")
+        if res:
+            res["name"] = name
+            prospekte.append(res)
+    if not prospekte:
+        raise RuntimeError(f"{note}; kein complete.pdf ladbar für {bases}")
+    return {"quelle": url, "hinweis": note, "prospekte": prospekte}
 
 
 # ----------------------------------------------------------------------- kaufDA
-def kaufda_url(key: str) -> str:
+def fetch_kaufda_text(key: str, dest: Path) -> dict:
+    """Notlösung: nur die Angebotstexte der kaufDA-Seite speichern."""
     slug, rid = RETAILERS[key]["kaufda"]
-    if rid:
-        return f"https://www.kaufda.de/{CITY_SLUG}/{slug}/p-r{rid}"
-    # ID unbekannt: auf Orts- und Discounter-Seite suchen
-    pat = re.compile(rf"/{CITY_SLUG}/([^/\"']+)/p-r(\d+)")
-    for page in (f"https://www.kaufda.de/{CITY_SLUG}",
-                 f"https://www.kaufda.de/{CITY_SLUG}/Discounter/p-c5",
-                 f"https://www.kaufda.de/{CITY_SLUG}/Supermarkt/p-c11"):
-        html = get(page).text
-        for s, i in pat.findall(html):
-            if re.search(RETAILERS[key]["match"], s, re.I):
-                return f"https://www.kaufda.de/{CITY_SLUG}/{s}/p-r{i}"
-    raise RuntimeError(f"kaufDA-Seite für {key} in {CITY_SLUG} nicht gefunden")
-
-
-def fetch_kaufda(key: str, dest: Path) -> dict:
-    url = kaufda_url(key)
+    url = f"https://www.kaufda.de/{CITY_SLUG}/{slug}/p-r{rid}"
     r = get(url)
     if r.status_code != 200:
-        raise RuntimeError(f"kaufDA antwortete mit {r.status_code}")
-    soup = BeautifulSoup(r.text, "html.parser")
-    match = re.compile(RETAILERS[key]["match"], re.I)
-
-    # 1) Angebotstexte der Seite sichern (Produkt, Marke, Preis ...)
-    text = soup.get_text("\n", strip=True)
-    (dest / f"{key}_kaufda_angebote.txt").write_text(text, encoding="utf-8")
-
-    # 2) Prospekt-IDs aus den Vorschaubildern (content-media.bonial.biz/<uuid>/...)
-    uuid_re = re.compile(r"content-media\.bonial\.biz/([0-9a-f\-]{36})/", re.I)
-    ours, others = [], []
-    for img in soup.find_all("img"):
-        src = " ".join(filter(None, [img.get("src"), img.get("data-src"), img.get("srcset")]))
-        m = uuid_re.search(src)
-        if not m:
-            continue
-        label = " ".join(filter(None, [img.get("alt"), img.get("title")]))
-        (ours if match.search(label) else others).append(m.group(1))
-    if not ours and not others:   # Bilder evtl. nur im Skript-JSON
-        others = uuid_re.findall(r.text)
-    uuids = list(dict.fromkeys(ours or others[:1]))[:3]
-    if not uuids:
-        raise RuntimeError("Keine Prospekt-Bilder auf der kaufDA-Seite gefunden")
-
-    prospekte = []
-    for i, u in enumerate(uuids, 1):
-        files = download_pages(
-            lambda n: f"https://content-media.bonial.biz/{u}/zoomlarge_page_{n}.jpg",
-            dest, f"{key}_kaufda_{i}")
-        log(f"   {key} kaufDA-Prospekt {i} ({u[:8]}…): {len(files)} Seiten")
-        prospekte.append({"id": u, "dateien": files, "zuordnung": "sicher" if ours else "geraten"})
-    return {"quelle": url, "prospekte": prospekte}
+        raise RuntimeError(f"kaufDA -> HTTP {r.status_code}")
+    text = BeautifulSoup(r.text, "html.parser").get_text("\n", strip=True)
+    f = dest / f"{key}_kaufda_angebote.txt"
+    f.write_text(text, encoding="utf-8")
+    return {"quelle": url, "textdatei": str(f)}
 
 
 # ------------------------------------------------------------------------ Ablauf
@@ -287,37 +257,30 @@ def main() -> int:
     index = {"erstellt": dt.datetime.now().isoformat(timespec="seconds"),
              "kalenderwoche": f"{YEAR}-KW{WEEK:02d}", "ort": "56470 Bad Marienberg",
              "haendler": {}}
+    plan = {"lidl": fetch_lidl, "aldi-sued": fetch_aldi, "rewe": fetch_rewe,
+            "netto": fetch_netto, "edeka": fetch_edeka}
 
-    plan = {
-        "lidl":      [("lidl-api", fetch_lidl), ("kaufda", None)],
-        "aldi-sued": [("aldi-direkt", fetch_aldi), ("kaufda", None)],
-        "rewe":      [("rewe-direkt", fetch_rewe), ("kaufda", None)],
-        "netto":     [("netto-direkt", fetch_netto), ("kaufda", None)],
-        "edeka":     [("edeka-direkt", fetch_edeka), ("kaufda", None)],
-    }
-
-    for key, sources in plan.items():
+    for key, fn in plan.items():
         log(f"== {RETAILERS[key]['name']}")
         dest = WEEK_DIR / key
         dest.mkdir(exist_ok=True)
-        entry = {"name": RETAILERS[key]["name"], "quellen": {}, "fehler": {}}
-        for label, fn in sources:
+        entry = {"name": RETAILERS[key]["name"], "ok": False, "fehler": None}
+        try:
+            entry.update(fn(dest))
+            entry["ok"] = True
+        except Exception as e:
+            entry["fehler"] = f"{type(e).__name__}: {e}"
+            log(f"   fehlgeschlagen: {e}")
             try:
-                res = fn(dest) if fn else fetch_kaufda(key, dest)
-                entry["quellen"][label] = res
-                if any(p.get("dateien") or p.get("datei") for p in res.get("prospekte", [])):
-                    break           # offizielle Quelle hat geklappt -> keine Reserve nötig
-            except Exception as e:  # eine Quelle darf scheitern
-                entry["fehler"][label] = f"{type(e).__name__}: {e}"
-                log(f"   {label} fehlgeschlagen: {e}")
-        entry["ok"] = any(
-            p.get("dateien") or p.get("datei")
-            for q in entry["quellen"].values() for p in q.get("prospekte", []))
+                entry["notloesung"] = fetch_kaufda_text(key, dest)
+                log("   kaufDA-Angebotstexte als Notlösung gespeichert")
+            except Exception as e2:
+                entry["notloesung"] = f"auch kaufDA fehlgeschlagen: {e2}"
         index["haendler"][key] = entry
 
     (WEEK_DIR / "index.json").write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
     ok = [k for k, v in index["haendler"].items() if v["ok"]]
-    log(f"\nFertig: {len(ok)}/{len(plan)} Händler mit Prospekt ({', '.join(ok) or '-'})")
+    log(f"\nFertig: {len(ok)}/{len(plan)} Händler mit PDF ({', '.join(ok) or '-'})")
     return 0 if ok else 1
 
 
